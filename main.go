@@ -29,6 +29,9 @@ type Trips struct {
 	DestinationAddress string         `json:"destinationAddress"`
 	AvailableSeats     int            `json:"availableSeats"`
 	IsActive           bool           `json:"isActive"`
+	IsCancelled        bool           `json:"isCancelled"`
+	IsStarted          bool           `json:"isStarted"`
+	TripEndTime        sql.NullString `json:"tripEndTime"`
 	CreatedAt          string         `json:"createdAt"`
 	LastUpdated        sql.NullString `json:"lastUpdated"`
 }
@@ -82,7 +85,7 @@ func trips(w http.ResponseWriter, r *http.Request) {
 		var trips []Trips
 		for results.Next() {
 			var trip Trips
-			err = results.Scan(&trip.TripID, &trip.OwnerUserID, &trip.PickupLocation, &trip.AltPickupLocation, &trip.StartTravelTime, &trip.DestinationAddress, &trip.AvailableSeats, &trip.IsActive, &trip.CreatedAt, &trip.LastUpdated)
+			err = results.Scan(&trip.TripID, &trip.OwnerUserID, &trip.PickupLocation, &trip.AltPickupLocation, &trip.StartTravelTime, &trip.DestinationAddress, &trip.AvailableSeats, &trip.IsActive, &trip.IsCancelled, &trip.IsStarted, &trip.TripEndTime, &trip.CreatedAt, &trip.LastUpdated)
 			if err != nil {
 				panic(err.Error())
 			}
@@ -143,15 +146,21 @@ func trips(w http.ResponseWriter, r *http.Request) {
 		var values []interface{}
 
 		for key, value := range updateFields {
-			if key == "IsActive" {
+			if key == "IsActive" || key == "IsCancelled" || key == "IsStarted" {
 				setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
-				var boolValue bool
-				if value.(bool) {
-					boolValue = true
+				// Check if the value is a string representation of a boolean
+				if strValue, ok := value.(string); ok {
+					// Convert string representation to boolean
+					boolValue, err := strconv.ParseBool(strValue)
+					if err != nil {
+						boolValue = false // Default value set to false
+					}
+					values = append(values, boolValue)
+				} else if boolValue, ok := value.(bool); ok {
+					values = append(values, boolValue)
 				} else {
-					boolValue = false
+					values = append(values, value)
 				}
-				values = append(values, boolValue)
 			} else {
 				setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
 				values = append(values, value)
@@ -191,6 +200,10 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 		AltPickupLocation  sql.NullString `json:"altPickupLocation"`
 		StartTravelTime    string         `json:"startTravelTime"`
 		DestinationAddress string         `json:"destinationAddress"`
+		IsActive           bool           `json:"isActive"`
+		IsCancelled        bool           `json:"isCancelled"`
+		IsStarted          bool           `json:"isStarted"`
+		TripEndTime        sql.NullString `json:"tripEndTime"`
 		CreatedAt          string         `json:"createdAt"`
 	}
 
@@ -203,7 +216,7 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 
 	id, _ := strconv.Atoi(params["id"])
 	fmt.Printf("/api/v1/myEnrolments/%d\n", id)
-	results, err := db.Query("SELECT u.Email, u.FirstName, u.Lastname, u.MobileNumber, t.PickupLocation,t.AltPickupLocation, t.StartTravelTime, t.DestinationAddress, t.CreatedAt FROM ((Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID) INNER JOIN Users u ON t.OwnerUserID = u.UserID) WHERE PassengerUserID = ?;", id)
+	results, err := db.Query("SELECT u.Email, u.FirstName, u.Lastname, u.MobileNumber, t.PickupLocation,t.AltPickupLocation, t.StartTravelTime, t.DestinationAddress, t.IsActive, t.IsCancelled, t.IsStarted, t.TripEndTime, t.CreatedAt FROM ((Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID) INNER JOIN Users u ON t.OwnerUserID = u.UserID) WHERE PassengerUserID = ?;", id)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -280,15 +293,21 @@ func publishTrip(w http.ResponseWriter, r *http.Request) {
 		var values []interface{}
 
 		for key, value := range updateFields {
-			if key == "IsActive" {
+			if key == "IsActive" || key == "IsCancelled" || key == "IsStarted" {
 				setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
-				var boolValue bool
-				if value.(bool) {
-					boolValue = true
+				// Check if the value is a string representation of a boolean
+				if strValue, ok := value.(string); ok {
+					// Convert string representation to boolean
+					boolValue, err := strconv.ParseBool(strValue)
+					if err != nil {
+						boolValue = false // Default value set to false
+					}
+					values = append(values, boolValue)
+				} else if boolValue, ok := value.(bool); ok {
+					values = append(values, boolValue)
 				} else {
-					boolValue = false
+					values = append(values, value)
 				}
-				values = append(values, boolValue)
 			} else {
 				setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
 				values = append(values, value)
