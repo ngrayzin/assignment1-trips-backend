@@ -123,7 +123,6 @@ func trips(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fmt.Printf("/api/v1/trips/%d\n", id)
-		fmt.Println(updateFields)
 
 		var checkForConflicts []time.Time
 		var newTripTime time.Time
@@ -165,8 +164,8 @@ func trips(w http.ResponseWriter, r *http.Request) {
 
 		if conflictFound {
 			fmt.Println("Conflicted time, you already have a trip within 30min before or after the current enrollment")
-			fmt.Fprintf(w, "enrollment conflict\n")
 			w.WriteHeader(http.StatusConflict)
+			fmt.Fprintf(w, "enrollment conflict\n")
 			return
 		} else {
 			result, err := db.Exec("INSERT INTO TripEnrollments (TripID, PassengerUserID) VALUES (?, ?)", id, userid)
@@ -190,7 +189,7 @@ func trips(w http.ResponseWriter, r *http.Request) {
 
 			// Update available seats
 			if seats, ok := updateFields["availableSeats"]; ok {
-				result, err = db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats - ? <= 0 THEN false ELSE IsActive END WHERE TripID = ?;",
+				result, err = db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats = 0 THEN false ELSE IsActive END WHERE TripID = ?;",
 					seats, seats, id)
 				if err != nil {
 					panic(err.Error())
@@ -372,15 +371,4 @@ func parseTime(timeStr string) (time.Time, error) {
 func isWithin30MinutesOrSameTime(time1, time2 time.Time) bool {
 	diff := time2.Sub(time1)
 	return diff >= -30*time.Minute && diff <= 30*time.Minute
-}
-
-func updateAvailableSeats(db *sql.DB, id int, seats int) error {
-	query := `
-		UPDATE Trips
-		SET AvailableSeats = AvailableSeats - ?,
-			IsActive = CASE WHEN AvailableSeats - ? <= 0 THEN false ELSE IsActive END
-		WHERE TripID = ?;
-	`
-	_, err := db.Exec(query, seats, seats, id)
-	return err
 }
