@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"database/sql"
 
@@ -122,68 +123,93 @@ func trips(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fmt.Printf("/api/v1/trips/%d\n", id)
+		fmt.Println(updateFields)
 
-		result, err := db.Exec("INSERT INTO TripEnrollments (TripID, PassengerUserID) VALUES (?, ?)", id, userid)
+		var checkForConflicts []time.Time
+		var newTripTime time.Time
+
+		// Fetch and parse new trip's start time
+		err := db.QueryRow("SELECT StartTravelTime FROM Trips WHERE TripID = ?", id).Scan(&newTripTime)
 		if err != nil {
-			me, ok := err.(*mysql.MySQLError)
-			if !ok {
+			panic(err.Error())
+		}
+
+		// Fetch and parse start times of enrolled trips for the user
+		timeRows, err := db.Query("SELECT t.StartTravelTime FROM Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID WHERE te.PassengerUserID = ?", userid)
+		if err != nil {
+			panic(err.Error())
+		}
+		defer timeRows.Close()
+
+		for timeRows.Next() {
+			var startTimeStr string
+			if err := timeRows.Scan(&startTimeStr); err != nil {
 				panic(err.Error())
 			}
-			if me.Number == 1062 {
-				fmt.Println("Already have this enrolment")
-				fmt.Fprintf(w, "Duplicate\n")
-				w.WriteHeader(http.StatusConflict)
-				return
+
+			startTime, err := parseTime(startTimeStr)
+			if err != nil {
+				panic(err.Error())
+			}
+			checkForConflicts = append(checkForConflicts, startTime)
+		}
+
+		// Check for conflicts
+		conflictFound := false
+		for _, startTime := range checkForConflicts {
+			if isWithin30MinutesOrSameTime(startTime, newTripTime) {
+				conflictFound = true
+				break
 			}
 		}
 
-		lastInsertID, err := result.LastInsertId()
-		if err != nil {
-			panic(err.Error())
-		}
+		if conflictFound {
+			fmt.Println("Conflicted time, you already have a trip within 30min before or after the current enrollment")
+			fmt.Fprintf(w, "enrollment conflict\n")
+			w.WriteHeader(http.StatusConflict)
+			return
+		} else {
+			result, err := db.Exec("INSERT INTO TripEnrollments (TripID, PassengerUserID) VALUES (?, ?)", id, userid)
+			if err != nil {
+				me, ok := err.(*mysql.MySQLError)
+				if !ok {
+					panic(err.Error())
+				}
+				if me.Number == 1062 {
+					fmt.Println("Already have this enrolment")
+					fmt.Fprintf(w, "Duplicate\n")
+					w.WriteHeader(http.StatusConflict)
+					return
+				}
+			}
 
-		var setClauses []string
-		var values []interface{}
+			lastInsertID, err := result.LastInsertId()
+			if err != nil {
+				panic(err.Error())
+			}
 
-		for key, value := range updateFields {
-			if key == "IsActive" || key == "IsCancelled" || key == "IsStarted" {
-				setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
-				// Check if the value is a string representation of a boolean
-				if strValue, ok := value.(string); ok {
-					// Convert string representation to boolean
-					boolValue, err := strconv.ParseBool(strValue)
-					if err != nil {
-						boolValue = false // Default value set to false
-					}
-					values = append(values, boolValue)
-				} else if boolValue, ok := value.(bool); ok {
-					values = append(values, boolValue)
+			// Update available seats
+			if seats, ok := updateFields["availableSeats"]; ok {
+				result, err = db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats - ? <= 0 THEN false ELSE IsActive END WHERE TripID = ?;",
+					seats, seats, id)
+				if err != nil {
+					panic(err.Error())
+				}
+				rowsAffected, _ := result.RowsAffected()
+				if rowsAffected == 0 {
+					fmt.Fprintf(w, "No rows were updated for TripID: %d\n", id)
 				} else {
-					values = append(values, value)
+					fmt.Printf("Trip with id %d updated\n", id)
+					fmt.Fprintf(w, "Trip data updated successfully\n")
+					fmt.Printf("Enrollment with id %d completed for user with id %d\n", lastInsertID, userid)
 				}
 			} else {
-				setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
-				values = append(values, value)
+				fmt.Fprintf(w, "No availableSeats field provided or not an integer\n")
 			}
+
+			fmt.Printf("Enrollment with id %d completed for user with id %d\n", lastInsertID, userid)
+			fmt.Fprintf(w, "Enrollment success\n")
 		}
-
-		query := fmt.Sprintf(`
-			UPDATE Trips
-			SET %s
-			WHERE TripID = ?;
-		`, strings.Join(setClauses, ", "))
-
-		values = append(values, id)
-		rows, err := db.Query(query, values...)
-		if err != nil {
-			panic(err.Error())
-		}
-		defer rows.Close()
-
-		fmt.Printf("Trip with id %d updated\n", id)
-		fmt.Fprintf(w, "Trip data updated successfully\n")
-		fmt.Printf("Enrollment with id %d completed for user with id %d\n", lastInsertID, userid)
-		fmt.Fprintf(w, "Enrollment success\n")
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprint(w, "Error")
@@ -333,4 +359,28 @@ func publishTrip(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprint(w, "Error")
 	}
+}
+
+func parseTime(timeStr string) (time.Time, error) {
+	parsedTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsedTime, nil
+}
+
+func isWithin30MinutesOrSameTime(time1, time2 time.Time) bool {
+	diff := time2.Sub(time1)
+	return diff >= -30*time.Minute && diff <= 30*time.Minute
+}
+
+func updateAvailableSeats(db *sql.DB, id int, seats int) error {
+	query := `
+		UPDATE Trips
+		SET AvailableSeats = AvailableSeats - ?,
+			IsActive = CASE WHEN AvailableSeats - ? <= 0 THEN false ELSE IsActive END
+		WHERE TripID = ?;
+	`
+	_, err := db.Exec(query, seats, seats, id)
+	return err
 }
