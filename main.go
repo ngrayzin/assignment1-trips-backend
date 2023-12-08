@@ -41,6 +41,7 @@ type TripEnrollment struct {
 	EnrolmentID    int
 	TripID         int
 	PassengerID    int
+	NumberOfSeats  sql.NullInt64
 	EnrollmentTime string
 }
 
@@ -63,7 +64,7 @@ func main() {
 	defer db.Close()
 
 	router := mux.NewRouter()
-	router.HandleFunc("/api/v1/trips", trips).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/trips/{userid}", trips).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/trips/{id}/{userid}", trips).Methods(http.MethodPut, http.MethodPost)
 	router.HandleFunc("/api/v1/myEnrolments/{id}", myEnrolments).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/publishTrip", publishTrip).Methods(http.MethodPost)
@@ -76,17 +77,44 @@ func main() {
 func trips(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		fmt.Println("/api/v1/trips")
-		results, err := db.Query("SELECT * FROM Trips;")
+		type GetTrips struct {
+			FirstName          string         `json:"firstName"`
+			LastName           string         `json:"lastName"`
+			TripID             int            `json:"tripID"`
+			OwnerUserID        int            `json:"ownerUserID"`
+			PickupLocation     string         `json:"pickupLoc"`
+			AltPickupLocation  sql.NullString `json:"altPickupLoc"`
+			StartTravelTime    string         `json:"startTravelTime"`
+			DestinationAddress string         `json:"destinationAddress"`
+			AvailableSeats     int            `json:"availableSeats"`
+			IsActive           bool           `json:"isActive"`
+			IsCancelled        bool           `json:"isCancelled"`
+			IsStarted          bool           `json:"isStarted"`
+			TripEndTime        sql.NullString `json:"tripEndTime"`
+			CreatedAt          string         `json:"createdAt"`
+			LastUpdated        sql.NullString `json:"lastUpdated"`
+			IsEnrolled         bool           `json:"isEnrolled"`
+		}
+		params := mux.Vars(r)
+		if _, ok := params["userid"]; !ok {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, "No ID")
+			return
+		}
+		userid, _ := strconv.Atoi(params["userid"])
+
+		fmt.Printf("/api/v1/trips/%d\n", userid)
+
+		results, err := db.Query("SELECT u.FirstName, u.LastName, t.*, CASE WHEN EXISTS (SELECT 1 FROM TripEnrollments WHERE TripID = t.TripID AND PassengerUserID = ?) THEN TRUE ELSE FALSE END AS IsEnrolled FROM Users u INNER JOIN Trips t ON u.UserID = t.OwnerUserID;", userid)
 		if err != nil {
 			panic(err.Error())
 		}
 		defer results.Close()
 
-		var trips []Trips
+		var trips []GetTrips
 		for results.Next() {
-			var trip Trips
-			err = results.Scan(&trip.TripID, &trip.OwnerUserID, &trip.PickupLocation, &trip.AltPickupLocation, &trip.StartTravelTime, &trip.DestinationAddress, &trip.AvailableSeats, &trip.IsActive, &trip.IsCancelled, &trip.IsStarted, &trip.TripEndTime, &trip.CreatedAt, &trip.LastUpdated)
+			var trip GetTrips
+			err = results.Scan(&trip.FirstName, &trip.LastName, &trip.TripID, &trip.OwnerUserID, &trip.PickupLocation, &trip.AltPickupLocation, &trip.StartTravelTime, &trip.DestinationAddress, &trip.AvailableSeats, &trip.IsActive, &trip.IsCancelled, &trip.IsStarted, &trip.TripEndTime, &trip.CreatedAt, &trip.LastUpdated, &trip.IsEnrolled)
 			if err != nil {
 				panic(err.Error())
 			}
@@ -168,46 +196,43 @@ func trips(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "enrollment conflict\n")
 			return
 		} else {
-			result, err := db.Exec("INSERT INTO TripEnrollments (TripID, PassengerUserID) VALUES (?, ?)", id, userid)
-			if err != nil {
-				me, ok := err.(*mysql.MySQLError)
-				if !ok {
-					panic(err.Error())
-				}
-				if me.Number == 1062 {
-					fmt.Println("Already have this enrolment")
-					fmt.Fprintf(w, "Duplicate\n")
-					w.WriteHeader(http.StatusConflict)
-					return
-				}
-			}
-
-			lastInsertID, err := result.LastInsertId()
-			if err != nil {
-				panic(err.Error())
-			}
-
 			// Update available seats
 			if seats, ok := updateFields["availableSeats"]; ok {
-				result, err = db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats = 0 THEN false ELSE IsActive END WHERE TripID = ?;",
+				result, err := db.Exec("INSERT INTO TripEnrollments (TripID, PassengerUserID, NumberOfSeats) VALUES (?, ?, ?)", id, userid, seats)
+				if err != nil {
+					me, ok := err.(*mysql.MySQLError)
+					if !ok {
+						panic(err.Error())
+					}
+					if me.Number == 1062 {
+						fmt.Println("Already have this enrolment")
+						fmt.Fprintf(w, "Duplicate\n")
+						w.WriteHeader(http.StatusConflict)
+						return
+					}
+				}
+
+				lastInsertID, err := result.LastInsertId()
+				if err != nil {
+					panic(err.Error())
+				}
+				result1, err := db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats = 0 THEN false ELSE IsActive END WHERE TripID = ?;",
 					seats, id)
 				if err != nil {
 					panic(err.Error())
 				}
-				rowsAffected, _ := result.RowsAffected()
+				rowsAffected, _ := result1.RowsAffected()
 				if rowsAffected == 0 {
 					fmt.Fprintf(w, "No rows were updated for TripID: %d\n", id)
 				} else {
 					fmt.Printf("Trip with id %d updated\n", id)
 					fmt.Fprintf(w, "Trip data updated successfully\n")
 					fmt.Printf("Enrollment with id %d completed for user with id %d\n", lastInsertID, userid)
+					fmt.Fprintf(w, "Enrollment success\n")
 				}
 			} else {
 				fmt.Fprintf(w, "No availableSeats field provided or not an integer\n")
 			}
-
-			fmt.Printf("Enrollment with id %d completed for user with id %d\n", lastInsertID, userid)
-			fmt.Fprintf(w, "Enrollment success\n")
 		}
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -249,7 +274,7 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 	var enrollments []TripEnrollmentData
 	for results.Next() {
 		var e TripEnrollmentData
-		err = results.Scan(&e.Email, &e.FirstName, &e.LastName, &e.MobileNumber, &e.PickupLocation, &e.AltPickupLocation, &e.StartTravelTime, &e.DestinationAddress, &e.CreatedAt)
+		err = results.Scan(&e.Email, &e.FirstName, &e.LastName, &e.MobileNumber, &e.PickupLocation, &e.AltPickupLocation, &e.StartTravelTime, &e.DestinationAddress, &e.IsActive, &e.IsCancelled, &e.IsStarted, &e.TripEndTime, &e.CreatedAt)
 		if err != nil {
 			panic(err.Error())
 		}
