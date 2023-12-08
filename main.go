@@ -68,7 +68,7 @@ func main() {
 	router.HandleFunc("/api/v1/trips/{id}/{userid}", trips).Methods(http.MethodPut, http.MethodPost)
 	router.HandleFunc("/api/v1/myEnrolments/{id}", myEnrolments).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/publishTrip", publishTrip).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/publishTrip/{id}", publishTrip).Methods(http.MethodPut)
+	router.HandleFunc("/api/v1/publishTrip/{id}", publishTrip).Methods(http.MethodGet, http.MethodPut)
 
 	fmt.Println("Listening at port 5001")
 	log.Fatal(http.ListenAndServe(":5001", handlers.CORS(allowHeaders, allowMethod, allowOrigins)(router)))
@@ -246,6 +246,7 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 		FirstName          string         `json:"firstName"`
 		LastName           string         `json:"lastName"`
 		MobileNumber       string         `json:"mobileNumber"`
+		NumberOfSeats      int            `json:"numberOfSeats"`
 		PickupLocation     string         `json:"pickupLocation"`
 		AltPickupLocation  sql.NullString `json:"altPickupLocation"`
 		StartTravelTime    string         `json:"startTravelTime"`
@@ -266,7 +267,7 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 
 	id, _ := strconv.Atoi(params["id"])
 	fmt.Printf("/api/v1/myEnrolments/%d\n", id)
-	results, err := db.Query("SELECT u.Email, u.FirstName, u.Lastname, u.MobileNumber, t.PickupLocation,t.AltPickupLocation, t.StartTravelTime, t.DestinationAddress, t.IsActive, t.IsCancelled, t.IsStarted, t.TripEndTime, t.CreatedAt FROM ((Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID) INNER JOIN Users u ON t.OwnerUserID = u.UserID) WHERE PassengerUserID = ?;", id)
+	results, err := db.Query("SELECT u.Email, u.FirstName, u.Lastname, u.MobileNumber, te.NumberOfSeats, t.PickupLocation,t.AltPickupLocation, t.StartTravelTime, t.DestinationAddress, t.IsActive, t.IsCancelled, t.IsStarted, t.TripEndTime, t.CreatedAt FROM ((Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID) INNER JOIN Users u ON t.OwnerUserID = u.UserID) WHERE PassengerUserID = ?;", id)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -274,7 +275,7 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 	var enrollments []TripEnrollmentData
 	for results.Next() {
 		var e TripEnrollmentData
-		err = results.Scan(&e.Email, &e.FirstName, &e.LastName, &e.MobileNumber, &e.PickupLocation, &e.AltPickupLocation, &e.StartTravelTime, &e.DestinationAddress, &e.IsActive, &e.IsCancelled, &e.IsStarted, &e.TripEndTime, &e.CreatedAt)
+		err = results.Scan(&e.Email, &e.FirstName, &e.LastName, &e.MobileNumber, &e.NumberOfSeats, &e.PickupLocation, &e.AltPickupLocation, &e.StartTravelTime, &e.DestinationAddress, &e.IsActive, &e.IsCancelled, &e.IsStarted, &e.TripEndTime, &e.CreatedAt)
 		if err != nil {
 			panic(err.Error())
 		}
@@ -291,6 +292,39 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 
 func publishTrip(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case http.MethodGet:
+		params := mux.Vars(r)
+		if _, ok := params["id"]; !ok {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, "No ID")
+			return
+		}
+		id, _ := strconv.Atoi(params["id"])
+
+		fmt.Printf("/api/v1/publishTrip/%d\n", id)
+
+		results, err := db.Query("SELECT * FROM Trips WHERE OwnerUserID = ?;", id)
+		if err != nil {
+			panic(err.Error())
+		}
+		defer results.Close()
+
+		var trips []Trips
+		for results.Next() {
+			var trip Trips
+			err = results.Scan(&trip.TripID, &trip.OwnerUserID, &trip.PickupLocation, &trip.AltPickupLocation, &trip.StartTravelTime, &trip.DestinationAddress, &trip.AvailableSeats, &trip.IsActive, &trip.IsCancelled, &trip.IsStarted, &trip.TripEndTime, &trip.CreatedAt, &trip.LastUpdated)
+			if err != nil {
+				panic(err.Error())
+			}
+			trips = append(trips, trip)
+		}
+		tripsJSON, err := json.Marshal(trips)
+		if err != nil {
+			panic(err.Error())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(tripsJSON)
 	case http.MethodPost:
 		var updateFields map[string]interface{}
 		decoder := json.NewDecoder(r.Body)
