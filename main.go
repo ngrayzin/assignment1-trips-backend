@@ -292,24 +292,44 @@ func myEnrolments(w http.ResponseWriter, r *http.Request) {
 func publishTrip(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
+		var updateFields map[string]interface{}
 		decoder := json.NewDecoder(r.Body)
-		var trip Trips
-		err := decoder.Decode(&trip)
-		if err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if err := decoder.Decode(&updateFields); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, "Invalid request body")
 			return
 		}
 
-		if trip.OwnerUserID <= 0 || trip.PickupLocation == "" || trip.StartTravelTime == "" || trip.DestinationAddress == "" || trip.AvailableSeats <= 0 {
-			fmt.Println("Invalid params")
-			http.Error(w, "Invalid parameters", http.StatusBadRequest)
-			return
+		// Ensure necessary fields exist in the decoded map
+		requiredFields := []string{"ownerUserID", "pickupLoc", "startTravelTime", "destinationAddress", "availableSeats"}
+		for _, field := range requiredFields {
+			if field == "altPickupLoc" {
+				altPickupLocValue, ok := updateFields[field].(string)
+				if ok && altPickupLocValue == "" {
+					// If AltPickupLocation is an empty string, set it to NULL
+					updateFields[field] = nil
+				}
+			}
+
+			if _, ok := updateFields[field]; !ok {
+				fmt.Println("Invalid params")
+				http.Error(w, "Invalid parameters", http.StatusBadRequest)
+				return
+			}
 		}
 
 		fmt.Println("/api/v1/publishTrip")
 
-		result, err := db.Exec("INSERT INTO Trips (OwnerUserID, PickupLocation, StartTravelTime, DestinationAddress, AvailableSeats) VALUES (?, ?, ?, ?, ?)",
-			trip.OwnerUserID, trip.PickupLocation, trip.StartTravelTime, trip.DestinationAddress, trip.AvailableSeats)
+		query := "INSERT INTO Trips (OwnerUserID, PickupLocation, AltPickupLocation, StartTravelTime, DestinationAddress, AvailableSeats) VALUES (?, ?, ?, ?, ?, ?)"
+		result, err := db.Exec(query,
+			updateFields["ownerUserID"],
+			updateFields["pickupLoc"],
+			updateFields["altPickupLoc"],
+			updateFields["startTravelTime"],
+			updateFields["destinationAddress"],
+			updateFields["availableSeats"],
+		)
+
 		if err != nil {
 			panic(err.Error())
 		}
@@ -320,6 +340,7 @@ func publishTrip(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fmt.Println("Trip created with ID:", id)
+		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "Trip created with ID: %d", id)
 	case http.MethodPut:
 		params := mux.Vars(r)
