@@ -134,7 +134,7 @@ func trips(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Fetch and parse start times of enrolled trips for the user
-		timeRows, err := db.Query("SELECT t.StartTravelTime FROM Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID WHERE te.PassengerUserID = ?", userid)
+		timeRows, err := db.Query("SELECT t.StartTravelTime FROM Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID WHERE te.PassengerUserID = ? AND t.TripID != ?", userid, id)
 		if err != nil {
 			panic(err.Error())
 		}
@@ -190,7 +190,7 @@ func trips(w http.ResponseWriter, r *http.Request) {
 			// Update available seats
 			if seats, ok := updateFields["availableSeats"]; ok {
 				result, err = db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats = 0 THEN false ELSE IsActive END WHERE TripID = ?;",
-					seats, seats, id)
+					seats, id)
 				if err != nil {
 					panic(err.Error())
 				}
@@ -368,7 +368,7 @@ func parseTime(timeStr string) (time.Time, error) {
 	return parsedTime, nil
 }
 
-func isWithin30MinutesOrSameTime(time1, time2 time.Time) bool {
+func isWithin30MinutesOrSameTime(time1 time.Time, time2 time.Time) bool {
 	diff := time2.Sub(time1)
 	return diff >= -30*time.Minute && diff <= 30*time.Minute
 }
