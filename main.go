@@ -198,33 +198,39 @@ func trips(w http.ResponseWriter, r *http.Request) {
 		} else {
 			// Update available seats
 			if seats, ok := updateFields["availableSeats"]; ok {
-				result, err := db.Exec("INSERT INTO TripEnrollments (TripID, PassengerUserID, NumberOfSeats) VALUES (?, ?, ?)", id, userid, seats)
-				if err != nil {
-					me, ok := err.(*mysql.MySQLError)
-					if !ok {
-						panic(err.Error())
-					}
-					if me.Number == 1062 {
-						fmt.Println("Already have this enrolment")
-						fmt.Fprintf(w, "Duplicate\n")
-						w.WriteHeader(http.StatusConflict)
-						return
-					}
-				}
-
-				lastInsertID, err := result.LastInsertId()
-				if err != nil {
-					panic(err.Error())
-				}
-				result1, err := db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats = 0 THEN false ELSE IsActive END WHERE TripID = ?;",
-					seats, id)
+				//check if there are enough seats
+				result1, err := db.Exec("UPDATE Trips SET AvailableSeats = AvailableSeats - ?, IsActive = CASE WHEN AvailableSeats = 0 THEN false ELSE IsActive END WHERE TripID = ? AND AvailableSeats >= ?;",
+					seats, id, seats)
 				if err != nil {
 					panic(err.Error())
 				}
 				rowsAffected, _ := result1.RowsAffected()
 				if rowsAffected == 0 {
+					fmt.Printf("No rows were updated for TripID: %d\n", id)
+					fmt.Printf("Not enough seats for TripID: %d\n", id)
+					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprintf(w, "No rows were updated for TripID: %d\n", id)
+					fmt.Fprintf(w, "Not enough seats for TripID: %d\n", id)
 				} else {
+					result, err := db.Exec("INSERT INTO TripEnrollments (TripID, PassengerUserID, NumberOfSeats) VALUES (?, ?, ?)", id, userid, seats)
+					if err != nil {
+						me, ok := err.(*mysql.MySQLError)
+						if !ok {
+							panic(err.Error())
+						}
+						if me.Number == 1062 {
+							fmt.Println("Already have this enrolment")
+							fmt.Fprintf(w, "Duplicate\n")
+							w.WriteHeader(http.StatusConflict)
+							return
+						}
+					}
+
+					lastInsertID, err := result.LastInsertId()
+					if err != nil {
+						panic(err.Error())
+					}
+
 					fmt.Printf("Trip with id %d updated\n", id)
 					fmt.Fprintf(w, "Trip data updated successfully\n")
 					fmt.Printf("Enrollment with id %d completed for user with id %d\n", lastInsertID, userid)
