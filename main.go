@@ -162,7 +162,7 @@ func trips(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Fetch and parse start times of enrolled trips for the user
-		timeRows, err := db.Query("SELECT t.StartTravelTime FROM Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID WHERE te.PassengerUserID = ? AND t.TripID != ?", userid, id)
+		timeRows, err := db.Query("SELECT t.StartTravelTime FROM Trips t INNER JOIN TripEnrollments te ON t.TripID = te.TripID WHERE te.PassengerUserID = ? AND t.TripID != ? AND IsCancelled = false AND TripEndTime IS NULL;", userid, id)
 		if err != nil {
 			panic(err.Error())
 		}
