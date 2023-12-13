@@ -16,3 +16,4 @@ To run the backend, run `go run main.go` in the project command prompt.
 
 ## Architecture diagram
 
+![Blank diagram - Page 1](https://github.com/ngrayzin/eti-assignment1-trips-backend/assets/94064635/e3e80b00-647d-4e48-8cad-4ff6a061813e)
